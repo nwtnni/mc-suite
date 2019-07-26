@@ -3,8 +3,6 @@ use std::error;
 use std::io;
 
 use std::io::Write;
-use std::str::FromStr;
-
 use std::io::BufRead;
 
 fn main() -> Result<(), Box<dyn error::Error>> {
@@ -29,7 +27,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         writeln!(out, "{}", line)?;
 
         if let Some(cap) = info.captures(&line) {
-            writeln!(out, "{}", &cap[0])?;
+            discord.send_message(channel, &cap[1], "", false)?;
         }
     }
 
