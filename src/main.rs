@@ -7,29 +7,16 @@ use std::str::FromStr;
 
 use std::io::BufRead;
 
-trait Tap: Sized {
-    fn tap<T, F: FnOnce(Self) -> T>(self, f: F) -> T {
-        f(self) 
-    }
-}
-
-impl<T: Sized> Tap for T {}
-
 fn main() -> Result<(), Box<dyn error::Error>> {
 
-    let discord = env::var("TOKEN")?
-        .as_str()
-        .tap(discord::Discord::from_bot_token)?;
+    let token = env::var("TOKEN")?;
+    let discord = discord::Discord::from_bot_token(&token)?;
 
-    let server = env::var("SERVER")?
-        .as_str()
-        .tap(u64::from_str)?
-        .tap(discord::model::ServerId);
+    discord.connect()?;
 
     let channel = env::var("CHANNEL")?
-        .as_str()
-        .tap(u64::from_str)?
-        .tap(discord::model::ChannelId);
+        .parse::<u64>()
+        .map(discord::model::ChannelId)?;
 
     let stdin = io::stdin();
     let stdout = io::stdout();
