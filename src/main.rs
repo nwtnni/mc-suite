@@ -1,7 +1,7 @@
 use std::env;
 use std::error;
 use std::io;
-use std::sync;
+use std::sync::{Arc, Mutex};
 use std::time;
 use std::thread;
 
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let args = env::args().collect::<Vec<_>>();
     let token = env::var("DISCORD_TOKEN")?;
     let discord = discord::Discord::from_bot_token(&token)
-        .map(sync::Arc::new)?;
+        .map(Arc::new)?;
 
     let (conn, _) = discord.connect()?;
 
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .parse::<u64>()
         .map(discord::model::ChannelId)?;
 
-    let state = sync::Arc::new(sync::Mutex::new(state::State::default()));
+    let state = Arc::new(Mutex::new(state::State::default()));
     let (tx, server) = server::Server::new(
         &args[1],
         general,

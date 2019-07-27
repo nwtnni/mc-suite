@@ -1,6 +1,6 @@
 use std::io;
 use std::process;
-use std::sync;
+use std::sync::{Arc, Mutex};
 
 use crate::event;
 use crate::state;
@@ -10,10 +10,10 @@ use std::io::BufRead;
 pub struct Server {
     general: discord::model::ChannelId,
     verbose: discord::model::ChannelId, 
-    discord: sync::Arc<discord::Discord>,
+    discord: Arc<discord::Discord>,
     child: process::Child,
     rx: process::ChildStdout,
-    state: sync::Arc<sync::Mutex<state::State>>,
+    state: Arc<Mutex<state::State>>,
 }
 
 impl Server {
@@ -21,10 +21,10 @@ impl Server {
         command: &str,
         general: discord::model::ChannelId,
         verbose: discord::model::ChannelId,
-        discord: sync::Arc<discord::Discord>,
-        state: sync::Arc<sync::Mutex<state::State>>,
+        discord: Arc<discord::Discord>,
+        state: Arc<Mutex<state::State>>,
     ) -> (
-        sync::Arc<sync::Mutex<process::ChildStdin>>,
+        Arc<Mutex<process::ChildStdin>>,
         Self,
     ) {
         let mut child = process::Command::new(command)
@@ -36,7 +36,7 @@ impl Server {
             .expect("[IMPOSSIBLE]: stdout is piped");
         let tx = child.stdin.take()
             .expect("[IMPOSSIBLE]: stdin is piped");
-        let tx = sync::Arc::new(sync::Mutex::new(tx));
+        let tx = Arc::new(Mutex::new(tx));
         (tx, Server { general, verbose, discord, child, rx, state })
     }
 
