@@ -1,6 +1,8 @@
+use std::io;
 use std::process;
 use std::sync;
 
+use std::io::BufRead;
 use std::io::Write;
 
 pub struct Server {
@@ -29,6 +31,13 @@ impl Server {
             .expect("[IMPOSSIBLE]: stdin is piped");
         let tx = sync::Arc::new(sync::Mutex::new(tx));
         (tx.clone(), Server { discord, child, rx, tx })
+    }
+
+    pub fn run(mut self) {
+        let reader = io::BufReader::new(&mut self.rx);
+        for line in reader.lines().map(Result::unwrap) {
+            
+        }
     }
 }
 
