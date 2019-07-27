@@ -1,6 +1,7 @@
 use std::env;
 use std::error;
 use std::io;
+use std::thread;
 
 use std::io::Write;
 use std::io::BufRead;
@@ -11,29 +12,37 @@ mod server;
 
 fn main() -> Result<(), Box<dyn error::Error>> {
 
-    let token = env::var("TOKEN")?;
+    let args = env::args().collect::<Vec<_>>();
+    let token = env::var("DISCORD_TOKEN")?;
     let discord = discord::Discord::from_bot_token(&token)?;
 
-    discord.connect()?;
+    let (conn, _) = discord.connect()?;
 
-    let channel = env::var("CHANNEL")?
+    let general = env::var("GENERAL_CHANNEL")?
         .parse::<u64>()
         .map(discord::model::ChannelId)?;
 
+    let verbose = env::var("VERBOSE_CHANNEL")?
+        .parse::<u64>()
+        .map(discord::model::ChannelId)?;
+
+    let (tx, server) = server::Server::new(
+        &args[1],
+        general,
+        verbose,
+        discord,
+    );
+    let disc = disc::Disc::new(conn, tx.clone());
+
+    let server_handle = thread::spawn(move || server.run());
+    let disc_handle = thread::spawn(move || disc.run());
+
     let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-
-    let info = regex::Regex::new(r".*\[Server thread/INFO\]: (.*)")?;
-
     for line in stdin.lock().lines().map(Result::unwrap) {
-
-        writeln!(out, "{}", line)?;
-
-        if let Some(cap) = info.captures(&line) {
-            discord.send_message(channel, &cap[1], "", false)?;
-        }
+        writeln!(&mut tx.lock().unwrap(), "{}", line).ok();
     }
 
+    server_handle.join().ok();
+    disc_handle.join().ok();
     Ok(())
 }
