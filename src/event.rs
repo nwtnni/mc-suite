@@ -11,30 +11,36 @@ lazy_static! {
 }
 
 #[derive(Clone, Debug)]
-pub enum Event {
-    Join(String),
-    Quit(String),
-    Achieve(String, String),
-    Message(String, String),
+pub enum Event<'line> {
+    Join(&'line str),
+    Quit(&'line str),
+    Achieve(&'line str, &'line str),
+    Message(&'line str, &'line str),
 }
 
-impl Event {
+impl<'line> Event<'line> {
     pub fn parse(s: &str) -> Option<Event> {
         if let Some(cap) = JOIN.captures(s) {
-            Some(Event::Join(cap[1].to_string()))
+            let name = cap.get(1).unwrap().as_str();
+            Some(Event::Join(name))
         } else if let Some(cap) = QUIT.captures(s) {
-            Some(Event::Quit(cap[1].to_string()))
+            let name = cap.get(1).unwrap().as_str();
+            Some(Event::Quit(name))
         } else if let Some(cap) = ACHIEVE.captures(s) {
-            Some(Event::Achieve(cap[1].to_string(), cap[2].to_string()))
+            let name = cap.get(1).unwrap().as_str();
+            let achieve = cap.get(2).unwrap().as_str();
+            Some(Event::Achieve(name, achieve))
         } else if let Some(cap) = MESSAGE.captures(s) {
-            Some(Event::Message(cap[1].to_string(), cap[2].to_string()))
+            let name = cap.get(1).unwrap().as_str();
+            let message = cap.get(2).unwrap().as_str();
+            Some(Event::Message(name, message))
         } else {
             None
         }
     }
 }
 
-impl fmt::Display for Event {
+impl<'line> fmt::Display for Event<'line> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         use Event::*;
         match self {
