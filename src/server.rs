@@ -8,7 +8,8 @@ use std::io::Write;
 use crate::event;
 
 pub struct Server {
-    channel: discord::model::ChannelId,
+    general: discord::model::ChannelId,
+    verbose: discord::model::ChannelId, 
     discord: discord::Discord,
     child: process::Child,
     rx: process::ChildStdout,
@@ -18,7 +19,8 @@ pub struct Server {
 impl Server {
     pub fn new(
         command: &str,
-        channel: discord::model::ChannelId,
+        general: discord::model::ChannelId,
+        verbose: discord::model::ChannelId,
         discord: discord::Discord
     ) -> (
         sync::Arc<sync::Mutex<process::ChildStdin>>,
@@ -34,15 +36,16 @@ impl Server {
         let tx = child.stdin.take()
             .expect("[IMPOSSIBLE]: stdin is piped");
         let tx = sync::Arc::new(sync::Mutex::new(tx));
-        (tx.clone(), Server { channel, discord, child, rx, tx })
+        (tx.clone(), Server { general, verbose, discord, child, rx, tx })
     }
 
     pub fn run(mut self) {
         let reader = io::BufReader::new(&mut self.rx);
         for line in reader.lines().map(Result::unwrap) {
             if let Some(event) = event::Event::parse(&line) {
-                self.discord.send_message(self.channel, &format!("{}", event), "", false).ok();
+                self.discord.send_message(self.general, &format!("{}", event), "", false).ok();
             }
+            self.discord.send_message(self.verbose, &line, "", false).ok();
             println!("{}", line);
         }
     }
@@ -50,10 +53,7 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let stdin = self.child.stdin
-            .as_mut()
-            .expect("Parent always pipes stdin to child");
-        writeln!(stdin, "stop").ok();
+        writeln!(&mut self.tx.lock().unwrap(), "stop").ok();
         self.child.wait().ok();
     }
 }

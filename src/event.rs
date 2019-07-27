@@ -4,10 +4,10 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 lazy_static! {
-    static ref JOIN: Regex = Regex::new(r"(.*)\[.*\] logged in with entity id at .*").unwrap();
-    static ref QUIT: Regex = Regex::new(r"(.*) left the game").unwrap();
-    static ref ACHIEVE: Regex = Regex::new(r"(.*) has made the advancement \[(.*)\]").unwrap();
-    static ref MESSAGE: Regex = Regex::new(r"<([^ ]*)> (.*)").unwrap();
+    static ref JOIN: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*)\[.*\] logged in with entity id at .*").unwrap();
+    static ref QUIT: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*) left the game").unwrap();
+    static ref ACHIEVE: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*) has made the advancement \[(.*)\]").unwrap();
+    static ref MESSAGE: Regex = Regex::new(r".*\[Server thread/INFO\]: <([^ ]*)> (.*)").unwrap();
 }
 
 #[derive(Clone, Debug)]
