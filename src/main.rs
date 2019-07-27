@@ -5,6 +5,7 @@ use std::io;
 use std::io::Write;
 use std::io::BufRead;
 
+mod disc;
 mod event;
 mod server;
 
