@@ -1,5 +1,5 @@
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Player(symbol::Symbol);
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Player(String);
 
 #[derive(Clone, Debug)]
 pub enum Event {
