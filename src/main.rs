@@ -6,6 +6,7 @@ use std::io::Write;
 use std::io::BufRead;
 
 mod event;
+mod server;
 
 fn main() -> Result<(), Box<dyn error::Error>> {
 
