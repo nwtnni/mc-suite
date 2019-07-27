@@ -2,10 +2,9 @@ use std::io;
 use std::process;
 use std::sync;
 
-use std::io::BufRead;
-use std::io::Write;
-
 use crate::event;
+
+use std::io::BufRead;
 
 pub struct Server {
     general: discord::model::ChannelId,
@@ -13,7 +12,6 @@ pub struct Server {
     discord: discord::Discord,
     child: process::Child,
     rx: process::ChildStdout,
-    tx: sync::Arc<sync::Mutex<process::ChildStdin>>,
 }
 
 impl Server {
@@ -36,7 +34,7 @@ impl Server {
         let tx = child.stdin.take()
             .expect("[IMPOSSIBLE]: stdin is piped");
         let tx = sync::Arc::new(sync::Mutex::new(tx));
-        (tx.clone(), Server { general, verbose, discord, child, rx, tx })
+        (tx, Server { general, verbose, discord, child, rx })
     }
 
     pub fn run(mut self) {
@@ -53,7 +51,6 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        writeln!(&mut self.tx.lock().unwrap(), "stop").ok();
         self.child.wait().ok();
     }
 }

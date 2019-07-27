@@ -34,15 +34,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     );
     let disc = disc::Disc::new(conn, tx.clone());
 
-    let server_handle = thread::spawn(move || server.run());
-    let disc_handle = thread::spawn(move || disc.run());
+    thread::spawn(move || server.run());
+    thread::spawn(move || disc.run());
 
     let stdin = io::stdin();
     for line in stdin.lock().lines().map(Result::unwrap) {
         writeln!(&mut tx.lock().unwrap(), "{}", line).ok();
+        if line == "quit" { break }
     }
 
-    server_handle.join().ok();
-    disc_handle.join().ok();
     Ok(())
 }
