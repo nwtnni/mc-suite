@@ -22,7 +22,7 @@ impl Disc {
         loop {
             use model::Event::*;
             match self.conn.recv_event() {
-            | Ok(MessageCreate(message)) => {
+            | Ok(MessageCreate(ref message)) if &message.author.name != "mc-sync" => {
                 writeln!(
                     &mut self.tx.lock().unwrap(),
                     "/say [{}]: {}",
