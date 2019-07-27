@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let stdin = io::stdin();
     for line in stdin.lock().lines().map(Result::unwrap) {
         writeln!(&mut tx.lock().unwrap(), "{}", line).ok();
-        if line == "quit" {
+        if line == "/stop" {
             thread::sleep(time::Duration::from_secs(15));
             break
         }
