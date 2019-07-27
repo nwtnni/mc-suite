@@ -5,6 +5,8 @@ use std::io;
 use std::io::Write;
 use std::io::BufRead;
 
+mod event;
+
 fn main() -> Result<(), Box<dyn error::Error>> {
 
     let token = env::var("TOKEN")?;
