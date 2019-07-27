@@ -1,6 +1,7 @@
 use std::env;
 use std::error;
 use std::io;
+use std::time;
 use std::thread;
 
 use std::io::Write;
@@ -40,7 +41,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let stdin = io::stdin();
     for line in stdin.lock().lines().map(Result::unwrap) {
         writeln!(&mut tx.lock().unwrap(), "{}", line).ok();
-        if line == "quit" { break }
+        if line == "quit" {
+            thread::sleep(time::Duration::from_secs(15));
+            break
+        }
     }
 
     Ok(())
