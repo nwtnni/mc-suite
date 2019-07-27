@@ -1,19 +1,34 @@
 use std::process;
+use std::sync;
 
 use std::io::Write;
 
 pub struct Server {
+    discord: discord::Discord,
     child: process::Child,
+    rx: process::ChildStdout,
+    tx: sync::Arc<sync::Mutex<process::ChildStdin>>,
 }
 
 impl Server {
-    pub fn new(command: &str) -> Self {
-        let child = process::Command::new(command)
+    pub fn new(
+        command: &str,
+        discord: discord::Discord
+    ) -> (
+        sync::Arc<sync::Mutex<process::ChildStdin>>,
+        Self,
+    ) {
+        let mut child = process::Command::new(command)
             .stdin(process::Stdio::piped())
             .stdout(process::Stdio::piped())
             .spawn()
             .expect("Failed to launch server");
-        Server { child }
+        let rx = child.stdout.take()
+            .expect("[IMPOSSIBLE]: stdout is piped");
+        let tx = child.stdin.take()
+            .expect("[IMPOSSIBLE]: stdin is piped");
+        let tx = sync::Arc::new(sync::Mutex::new(tx));
+        (tx.clone(), Server { discord, child, rx, tx })
     }
 }
 
