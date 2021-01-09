@@ -1,14 +1,23 @@
 use std::fmt;
 
-use lazy_static::lazy_static;
+use once_cell::sync;
 use regex::Regex;
 
-lazy_static! {
-    static ref JOIN: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*)\[.*\] logged in with entity id .* at .*").unwrap();
-    static ref QUIT: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*) left the game").unwrap();
-    static ref ACHIEVE: Regex = Regex::new(r".*\[Server thread/INFO\]: (.*) has made the advancement \[(.*)\]").unwrap();
-    static ref MESSAGE: Regex = Regex::new(r".*\[Server thread/INFO\]: <([^ ]*)> (.*)").unwrap();
-}
+static JOIN: sync::Lazy<Regex> = sync::Lazy::new(|| {
+    Regex::new(r".*\[Server thread/INFO\]: (.*)\[.*\] logged in with entity id .* at .*").unwrap()
+});
+
+static QUIT: sync::Lazy<Regex> = sync::Lazy::new(|| {
+    Regex::new(r".*\[Server thread/INFO\]: (.*) left the game").unwrap()
+});
+
+static ACHIEVE: sync::Lazy<Regex> = sync::Lazy::new(|| {
+    Regex::new(r".*\[Server thread/INFO\]: (.*) has made the advancement \[(.*)\]").unwrap()
+});
+
+static MESSAGE: sync::Lazy<Regex> = sync::Lazy::new(|| {
+    Regex::new(r".*\[Server thread/INFO\]: <([^ ]*)> (.*)").unwrap()
+});
 
 #[derive(Clone, Debug)]
 pub enum Event<'line> {

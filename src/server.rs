@@ -9,7 +9,7 @@ use std::io::BufRead;
 
 pub struct Server {
     general: discord::model::ChannelId,
-    verbose: discord::model::ChannelId, 
+    verbose: discord::model::ChannelId,
     discord: Arc<discord::Discord>,
     child: process::Child,
     rx: process::ChildStdout,
@@ -46,8 +46,8 @@ impl Server {
             if let Some(event) = event::Event::parse(&line) {
                 use event::Event::*;
                 match &event {
-                | Join(name) => self.state.lock().unwrap().insert_player(name),    
-                | Quit(name) => self.state.lock().unwrap().remove_player(name),    
+                | Join(name) => self.state.lock().unwrap().insert_player(name),
+                | Quit(name) => self.state.lock().unwrap().remove_player(name),
                 | _ => (),
                 };
                 self.discord.send_message(self.general, &event.to_string(), "", false).ok();

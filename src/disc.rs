@@ -25,7 +25,7 @@ impl Disc {
         state: Arc<Mutex<state::State>>,
         tx: Arc<Mutex<process::ChildStdin>>,
     ) -> Self {
-        Disc { conn, discord, general, state, tx } 
+        Disc { conn, discord, general, state, tx }
     }
 
     pub fn run(mut self) {
