@@ -17,21 +17,24 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time;
 
+/// Start and hibernate an EC2 instance based on Discord voice channel usage.
 #[derive(Debug, StructOpt)]
 struct Opt {
+    /// Discord bot application token
     #[structopt(long, env = "DISCORD_TOKEN")]
     token: String,
 
+    /// Send server status updates
     #[structopt(long, env = "DISCORD_GENERAL_CHANNEL_ID")]
     general_id: u64,
 
+    /// AWS EC2 instance that the server runs on
     #[structopt(long, env = "AWS_INSTANCE_ID")]
     instance_id: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-
     let opt = Opt::from_args();
 
     let (tx, mut rx) = mpsc::channel(10);
@@ -95,7 +98,9 @@ async fn main() -> anyhow::Result<()> {
                 ec2.start().await?;
 
                 general_channel
-                    .edit_message(&http.http, message, |message| message.content("Server has started!"))
+                    .edit_message(&http.http, message, |message| {
+                        message.content("Server has started!")
+                    })
                     .await?;
                 typing.stop();
             } else if connected == 0 && mem::replace(&mut online, false) {
@@ -107,7 +112,9 @@ async fn main() -> anyhow::Result<()> {
                 ec2.hibernate().await?;
 
                 general_channel
-                    .edit_message(&http.http, message, |message| message.content("Server has stopped."))
+                    .edit_message(&http.http, message, |message| {
+                        message.content("Server has stopped.")
+                    })
                     .await?;
                 typing.stop();
             }

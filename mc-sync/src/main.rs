@@ -15,17 +15,22 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::process;
 use tokio::sync::mpsc;
 
+/// Wrap a Minecraft server and synchronize the chat with Discord.
 #[derive(Debug, StructOpt)]
 struct Opt {
-    #[structopt(short, long, env)]
-    discord_token: String,
+    /// Discord bot application token
+    #[structopt(long, env = "DISCORD_TOKEN")]
+    token: String,
 
-    #[structopt(short, long, env)]
-    general_channel: u64,
+    /// Forward interesting server events
+    #[structopt(long, env = "DISCORD_GENERAL_CHANNEL_ID")]
+    general_id: u64,
 
-    #[structopt(short, long, env)]
-    server_channel: u64,
+    /// Forward all server logs
+    #[structopt(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
+    verbose_id: u64,
 
+    /// Path to Minecraft server.jar or script
     command: String,
 }
 
@@ -37,14 +42,14 @@ async fn main() -> anyhow::Result<()> {
 
     let (mut child_stdin, minecraft) = Minecraft::new(&opt.command, tx.clone());
     let (mut stdout, stdin) = Stdin::new(tx.clone());
-    let mut discord = serenity::Client::builder(&opt.discord_token)
+    let mut discord = serenity::Client::builder(&opt.token)
         .event_handler(Discord(tx))
         .framework(framework::StandardFramework::default())
         .await?;
 
     let http = Arc::clone(&discord.cache_and_http);
-    let general_channel = id::ChannelId::from(opt.general_channel);
-    let server_channel = id::ChannelId::from(opt.server_channel);
+    let general_channel = id::ChannelId::from(opt.general_id);
+    let verbose_channel = id::ChannelId::from(opt.verbose_id);
     let mut online = HashSet::<String>::new();
 
     let minecraft = tokio::spawn(async move { minecraft.start().await });
@@ -83,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                     stdout.write_all(&[b'\n']).await?;
                     stdout.flush().await?;
 
-                    server_channel
+                    verbose_channel
                         .send_message(&http.http, |builder| builder.content(&message))
                         .await?;
 
