@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 /// Shutdown port.
 static PORT: u16 = 10101;
 static ADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+static STOP: &str = "/stop";
 
 /// Wrap a Minecraft server and synchronize the chat with Discord.
 #[derive(Debug, StructOpt)]
@@ -117,16 +118,14 @@ async fn main() -> anyhow::Result<()> {
                     .send_message(&http.http, |builder| builder.content(&message))
                     .await?;
             }
-            Event::Stdin(mut message) => {
-                message.push('\n');
+            Event::Stdin(message) => {
                 child_stdin.write_all(message.as_bytes()).await?;
+                child_stdin.write_all(&[b'\n']).await?;
                 child_stdin.flush().await?;
-            }
-            Event::Shutdown => {
-                child_stdin.write_all(b"/stop\n").await?;
-                child_stdin.flush().await?;
-                child.wait().await?;
-                break;
+                if message.trim() == STOP {
+                    child.wait().await?;
+                    break;
+                }
             }
         }
     }
@@ -147,7 +146,6 @@ enum Event {
     Discord(channel::Message),
     Minecraft(String),
     Stdin(String),
-    Shutdown,
 }
 
 struct Discord(mpsc::Sender<Event>);
@@ -249,7 +247,7 @@ impl Shutdown {
 
     async fn start(self) -> anyhow::Result<()> {
         let (_, _) = self.listener.accept().await?;
-        self.tx.send(Event::Shutdown).await?;
+        self.tx.send(Event::Stdin(String::from(STOP))).await?;
         Ok(())
     }
 }
