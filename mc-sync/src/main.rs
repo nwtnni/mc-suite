@@ -40,10 +40,6 @@ struct Opt {
     #[structopt(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
     verbose_id: u64,
 
-    /// Shut down the computer after receiving the shutdown signal
-    #[structopt(long)]
-    shutdown: bool,
-
     /// Path to Minecraft server.jar or script
     command: String,
 }
@@ -93,10 +89,6 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(shutdown_rx)?;
     runtime.block_on(child.wait())?;
     runtime.shutdown_background();
-
-    if opt.shutdown {
-        std::process::Command::new("shutdown").arg("now").spawn()?;
-    }
 
     Ok(())
 }
