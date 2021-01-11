@@ -66,24 +66,26 @@ async fn main() -> anyhow::Result<()> {
     let general_channel = id::ChannelId::from(opt.general_id);
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
 
-    tokio::spawn(async move { shutdown.start().await });
-    tokio::spawn(async move { discord.start().await });
-    tokio::spawn(async move { minecraft.start().await });
-    tokio::spawn(async move { stdin.start().await });
-    tokio::spawn(async move {
-        process(
-            event_rx,
-            Some(shutdown_tx),
-            child_stdin,
-            stdout,
-            http,
-            general_channel,
-            verbose_channel,
-        )
-        .await
-    });
+    tokio::select! {
+        done = shutdown_rx => done?,
+        done = tokio::spawn(async move { shutdown.start().await }) => done??,
+        done = tokio::spawn(async move { discord.start().await }) => done??,
+        done = tokio::spawn(async move { minecraft.start().await }) => done??,
+        done = tokio::spawn(async move { stdin.start().await }) => done??,
+        done = tokio::spawn(async move {
+            process(
+                event_rx,
+                Some(shutdown_tx),
+                child_stdin,
+                stdout,
+                http,
+                general_channel,
+                verbose_channel,
+            )
+            .await
+        }) => done??,
+    }
 
-    shutdown_rx.await?;
     child.wait().await?;
 
     if opt.shutdown {
