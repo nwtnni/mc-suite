@@ -17,6 +17,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::net;
 use tokio::process;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 /// Shutdown port.
 static PORT: u16 = 10101;
@@ -50,27 +51,64 @@ struct Opt {
 async fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
 
-    let (tx, mut rx) = mpsc::channel(10);
+    let (event_tx, event_rx) = mpsc::channel(10);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    let shutdown = Shutdown::new(tx.clone()).await?;
-    let (mut child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, tx.clone());
-    let (mut stdout, stdin) = Stdin::new(tx.clone());
+    let shutdown = Shutdown::new(event_tx.clone()).await?;
+    let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
+    let (stdout, stdin) = Stdin::new(event_tx.clone());
     let mut discord = serenity::Client::builder(&opt.token)
-        .event_handler(Discord(tx))
+        .event_handler(Discord(event_tx))
         .framework(framework::StandardFramework::default())
         .await?;
 
     let http = Arc::clone(&discord.cache_and_http);
     let general_channel = id::ChannelId::from(opt.general_id);
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
-    let mut online = HashSet::<String>::new();
 
     tokio::spawn(async move { shutdown.start().await });
     tokio::spawn(async move { discord.start().await });
     tokio::spawn(async move { minecraft.start().await });
     tokio::spawn(async move { stdin.start().await });
+    tokio::spawn(async move {
+        process(
+            event_rx,
+            Some(shutdown_tx),
+            child_stdin,
+            stdout,
+            http,
+            general_channel,
+            verbose_channel,
+        )
+        .await
+    });
 
-    while let Some(event) = rx.recv().await {
+    shutdown_rx.await?;
+    child.wait().await?;
+
+    if opt.shutdown {
+        process::Command::new("shutdown")
+            .arg("now")
+            .spawn()?
+            .wait()
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn process(
+    mut event_rx: mpsc::Receiver<Event>,
+    mut shutdown_tx: Option<oneshot::Sender<()>>,
+    mut child_stdin: io::BufWriter<process::ChildStdin>,
+    mut stdout: io::BufWriter<io::Stdout>,
+    http: Arc<serenity::CacheAndHttp>,
+    general_channel: id::ChannelId,
+    verbose_channel: id::ChannelId,
+) -> anyhow::Result<()> {
+    let mut online = HashSet::<String>::new();
+
+    while let Some(event) = event_rx.recv().await {
         match event {
             Event::Discord(message) => {
                 if message.author.name == "mc-sync" {
@@ -123,19 +161,13 @@ async fn main() -> anyhow::Result<()> {
                 child_stdin.write_all(&[b'\n']).await?;
                 child_stdin.flush().await?;
                 if message.trim() == STOP {
-                    child.wait().await?;
-                    break;
+                    if let Some(tx) = shutdown_tx.take() {
+                        tx.send(())
+                            .expect("[INTERNAL ERROR]: `shutdown_rx` dropped");
+                    }
                 }
             }
         }
-    }
-
-    if opt.shutdown {
-        process::Command::new("shutdown")
-            .arg("now")
-            .spawn()?
-            .wait()
-            .await?;
     }
 
     Ok(())
