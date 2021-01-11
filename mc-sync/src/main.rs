@@ -18,7 +18,6 @@ use tokio::net;
 use tokio::process;
 use tokio::runtime;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 /// Shutdown port.
 static PORT: u16 = 10101;
@@ -54,7 +53,6 @@ fn main() -> anyhow::Result<()> {
     let _guard = runtime.enter();
 
     let (event_tx, event_rx) = mpsc::channel(10);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
     let shutdown = runtime.block_on(Shutdown::new(event_tx.clone()))?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
@@ -76,8 +74,7 @@ fn main() -> anyhow::Result<()> {
     runtime.spawn(async move {
         process(
             event_rx,
-            Some(shutdown_tx),
-            Some(child_stdin),
+            child_stdin,
             stdout,
             http,
             general_channel,
@@ -86,7 +83,6 @@ fn main() -> anyhow::Result<()> {
         .await
     });
 
-    runtime.block_on(shutdown_rx)?;
     runtime.block_on(child.wait())?;
     runtime.shutdown_background();
 
@@ -95,8 +91,7 @@ fn main() -> anyhow::Result<()> {
 
 async fn process(
     mut event_rx: mpsc::Receiver<Event>,
-    mut shutdown_tx: Option<oneshot::Sender<()>>,
-    mut child_stdin: Option<io::BufWriter<process::ChildStdin>>,
+    mut child_stdin: io::BufWriter<process::ChildStdin>,
     mut stdout: io::BufWriter<io::Stdout>,
     http: Arc<serenity::CacheAndHttp>,
     general_channel: id::ChannelId,
@@ -121,11 +116,9 @@ async fn process(
                     continue;
                 }
 
-                if let Some(child_stdin) = &mut child_stdin {
-                    let say = format!("/say [{}]: {}\n", message.author.name, message.content);
-                    child_stdin.write_all(say.as_bytes()).await?;
-                    child_stdin.flush().await?;
-                }
+                let say = format!("/say [{}]: {}\n", message.author.name, message.content);
+                child_stdin.write_all(say.as_bytes()).await?;
+                child_stdin.flush().await?;
             }
             Event::Minecraft(message) => {
                 stdout.write_all(message.as_bytes()).await?;
@@ -155,19 +148,9 @@ async fn process(
                     .await?;
             }
             Event::Stdin(message) => {
-                if let Some(child_stdin) = &mut child_stdin {
-                    child_stdin.write_all(message.as_bytes()).await?;
-                    child_stdin.write_all(&[b'\n']).await?;
-                    child_stdin.flush().await?;
-                }
-
-                if message.trim() == STOP {
-                    if let Some(tx) = shutdown_tx.take() {
-                        child_stdin.take();
-                        tx.send(())
-                            .expect("[INTERNAL ERROR]: `shutdown_rx` dropped");
-                    }
-                }
+                child_stdin.write_all(message.as_bytes()).await?;
+                child_stdin.write_all(&[b'\n']).await?;
+                child_stdin.flush().await?;
             }
         }
     }
