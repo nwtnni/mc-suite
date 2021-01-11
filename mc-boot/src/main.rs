@@ -3,18 +3,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rusoto_core::Region;
+use rusoto_ec2::DescribeInstanceStatusRequest;
 use rusoto_ec2::Ec2 as _;
 use rusoto_ec2::Ec2Client;
-use rusoto_ec2::InstanceStateChange;
 use rusoto_ec2::StartInstancesRequest;
-use rusoto_ec2::StopInstancesRequest;
 use serenity::client;
 use serenity::framework;
 use serenity::model::id;
 use serenity::model::voice;
 use structopt::StructOpt;
+use tokio::net;
 use tokio::sync::mpsc;
-use tokio::task;
 use tokio::time;
 
 /// Start and hibernate an EC2 instance based on Discord voice channel usage.
@@ -109,7 +108,8 @@ async fn main() -> anyhow::Result<()> {
                     .say(&http.http, "Server is stopping...")
                     .await?;
 
-                ec2.hibernate().await?;
+                let _ = net::TcpStream::connect("craft.nwtnni.me:10101").await?;
+                ec2.wait_until_stopped().await?;
 
                 general_channel
                     .edit_message(&http.http, message, |message| {
@@ -176,6 +176,7 @@ impl Ec2 {
         }
     }
 
+    /// Start the instance and wait until it is running.
     async fn start(&self) -> anyhow::Result<()> {
         let request = StartInstancesRequest {
             additional_info: None,
@@ -183,50 +184,50 @@ impl Ec2 {
             instance_ids: vec![self.instance.clone()],
         };
 
-        loop {
-            let response = self.client.start_instances(request.clone()).await?;
-
-            if self.success(response.starting_instances, RUNNING) {
-                return Ok(());
-            }
-
-            time::sleep(SLEEP).await;
-        }
-    }
-
-    async fn hibernate(&self) -> anyhow::Result<()> {
-        let request = StopInstancesRequest {
-            dry_run: Some(false),
-            force: Some(false),
-            hibernate: Some(true),
-            instance_ids: vec![self.instance.clone()],
-        };
-
-        loop {
-            let response = self.client.stop_instances(request.clone()).await?;
-
-            if self.success(response.stopping_instances, STOPPED) {
-                return Ok(());
-            }
-
-            time::sleep(SLEEP).await;
-        }
-    }
-
-    fn success(&self, changes: Option<Vec<InstanceStateChange>>, state: i64) -> bool {
-        changes
+        while !self
+            .client
+            .start_instances(request.clone())
+            .await?
+            .starting_instances
             .into_iter()
             .flatten()
             .filter(|change| change.instance_id.as_ref() == Some(&self.instance))
             .filter_map(|change| change.current_state)
             .filter_map(|state| state.code)
-            .any(|code| code & 0b1111_1111 == state)
-    }
-}
+            .any(|code| code & 0b1111_1111 == RUNNING)
+        {
+            time::sleep(SLEEP).await;
+        }
 
-impl Drop for Ec2 {
-    fn drop(&mut self) {
-        let ec2 = self.clone();
-        task::spawn_blocking(|| async move { ec2.hibernate().await });
+        Ok(())
+    }
+
+    /// Wait until the instance is stopped.
+    async fn wait_until_stopped(&self) -> anyhow::Result<()> {
+        let request = DescribeInstanceStatusRequest {
+            dry_run: Some(false),
+            filters: None,
+            include_all_instances: Some(true),
+            instance_ids: Some(vec![self.instance.clone()]),
+            max_results: None,
+            next_token: None,
+        };
+
+        while !self
+            .client
+            .describe_instance_status(request.clone())
+            .await?
+            .instance_statuses
+            .into_iter()
+            .flatten()
+            .filter(|status| status.instance_id.as_ref() == Some(&self.instance))
+            .filter_map(|status| status.instance_state)
+            .filter_map(|state| state.code)
+            .any(|code| code & 0b1111_1111 == STOPPED)
+        {
+            time::sleep(SLEEP).await;
+        }
+
+        Ok(())
     }
 }

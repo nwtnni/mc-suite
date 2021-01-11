@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use joinery::JoinableIterator;
@@ -12,8 +14,13 @@ use structopt::StructOpt;
 use tokio::io;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::io::AsyncWriteExt as _;
+use tokio::net;
 use tokio::process;
 use tokio::sync::mpsc;
+
+/// Shutdown port.
+static PORT: u16 = 10101;
+static ADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 
 /// Wrap a Minecraft server and synchronize the chat with Discord.
 #[derive(Debug, StructOpt)]
@@ -30,6 +37,10 @@ struct Opt {
     #[structopt(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
     verbose_id: u64,
 
+    /// Shut down the computer after receiving the shutdown signal
+    #[structopt(long)]
+    shutdown: bool,
+
     /// Path to Minecraft server.jar or script
     command: String,
 }
@@ -40,7 +51,8 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(10);
 
-    let (mut child_stdin, minecraft) = Minecraft::new(&opt.command, tx.clone());
+    let shutdown = Shutdown::new(tx.clone()).await?;
+    let (mut child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, tx.clone());
     let (mut stdout, stdin) = Stdin::new(tx.clone());
     let mut discord = serenity::Client::builder(&opt.token)
         .event_handler(Discord(tx))
@@ -52,79 +64,79 @@ async fn main() -> anyhow::Result<()> {
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
     let mut online = HashSet::<String>::new();
 
-    let minecraft = tokio::spawn(async move { minecraft.start().await });
-    let stdin = tokio::spawn(async move { stdin.start().await });
-    let discord = tokio::spawn(async move {
-        // Might disconnect on hibernation.
-        loop {
-            discord.start().await.ok();
-        }
-    });
+    tokio::spawn(async move { shutdown.start().await });
+    tokio::spawn(async move { discord.start().await });
+    tokio::spawn(async move { minecraft.start().await });
+    tokio::spawn(async move { stdin.start().await });
 
-    let main = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                Event::Discord(message) => {
-                    if message.author.name == "mc-sync" {
-                        continue;
-                    }
-
-                    if message.content.trim() == "!online" {
-                        let online =
-                            format!("{} online: {}", online.len(), online.iter().join_with(", "));
-                        message
-                            .channel_id
-                            .send_message(&http.http, |builder| builder.content(online))
-                            .await?;
-                        continue;
-                    }
-
-                    let say = format!("/say [{}]: {}\n", message.author.name, message.content);
-                    child_stdin.write_all(say.as_bytes()).await?;
-                    child_stdin.flush().await?;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::Discord(message) => {
+                if message.author.name == "mc-sync" {
+                    continue;
                 }
-                Event::Minecraft(message) => {
-                    stdout.write_all(message.as_bytes()).await?;
-                    stdout.write_all(&[b'\n']).await?;
-                    stdout.flush().await?;
 
-                    verbose_channel
-                        .send_message(&http.http, |builder| builder.content(&message))
+                if message.content.trim() == "!online" {
+                    let online =
+                        format!("{} online: {}", online.len(), online.iter().join_with(", "));
+                    message
+                        .channel_id
+                        .send_message(&http.http, |builder| builder.content(online))
                         .await?;
-
-                    let message = if let Some(captures) = JOIN.captures(&message) {
-                        online.insert(captures[1].to_owned());
-                        format!("{} joined the server!", &captures[1])
-                    } else if let Some(captures) = QUIT.captures(&message) {
-                        online.remove(&captures[1]);
-                        format!("{} left the server.", &captures[1])
-                    } else if let Some(captures) = ACHIEVEMENT.captures(&message) {
-                        format!("{} unlocked achievement [{}]!", &captures[1], &captures[2])
-                    } else if let Some(captures) = MESSAGE.captures(&message) {
-                        format!("[{}]: {}", &captures[1], &captures[2])
-                    } else {
-                        continue;
-                    };
-
-                    general_channel
-                        .send_message(&http.http, |builder| builder.content(&message))
-                        .await?;
+                    continue;
                 }
-                Event::Stdin(mut message) => {
-                    message.push('\n');
-                    child_stdin.write_all(message.as_bytes()).await?;
-                    child_stdin.flush().await?;
-                }
+
+                let say = format!("/say [{}]: {}\n", message.author.name, message.content);
+                child_stdin.write_all(say.as_bytes()).await?;
+                child_stdin.flush().await?;
+            }
+            Event::Minecraft(message) => {
+                stdout.write_all(message.as_bytes()).await?;
+                stdout.write_all(&[b'\n']).await?;
+                stdout.flush().await?;
+
+                verbose_channel
+                    .send_message(&http.http, |builder| builder.content(&message))
+                    .await?;
+
+                let message = if let Some(captures) = JOIN.captures(&message) {
+                    online.insert(captures[1].to_owned());
+                    format!("{} joined the server!", &captures[1])
+                } else if let Some(captures) = QUIT.captures(&message) {
+                    online.remove(&captures[1]);
+                    format!("{} left the server.", &captures[1])
+                } else if let Some(captures) = ACHIEVEMENT.captures(&message) {
+                    format!("{} unlocked achievement [{}]!", &captures[1], &captures[2])
+                } else if let Some(captures) = MESSAGE.captures(&message) {
+                    format!("[{}]: {}", &captures[1], &captures[2])
+                } else {
+                    continue;
+                };
+
+                general_channel
+                    .send_message(&http.http, |builder| builder.content(&message))
+                    .await?;
+            }
+            Event::Stdin(mut message) => {
+                message.push('\n');
+                child_stdin.write_all(message.as_bytes()).await?;
+                child_stdin.flush().await?;
+            }
+            Event::Shutdown => {
+                child_stdin.write_all(b"/stop\n").await?;
+                child_stdin.flush().await?;
+                child.wait().await?;
+                break;
             }
         }
-        Result::<_, anyhow::Error>::Ok(())
-    });
+    }
 
-    tokio::select! {
-        result = discord => result?,
-        result = minecraft => result??,
-        result = stdin => result??,
-        result = main => result??,
+    if opt.shutdown {
+        process::Command::new("shutdown")
+            .arg("now")
+            .spawn()?
+            .wait()
+            .await?;
     }
 
     Ok(())
@@ -135,6 +147,7 @@ enum Event {
     Discord(channel::Message),
     Minecraft(String),
     Stdin(String),
+    Shutdown,
 }
 
 struct Discord(mpsc::Sender<Event>);
@@ -165,14 +178,15 @@ static MESSAGE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r".*\[Server thread/INFO\]: <([^ \]]*)> (.*)").unwrap());
 
 struct Minecraft {
-    #[allow(unused)]
-    child: process::Child,
     stdout: io::BufReader<process::ChildStdout>,
     tx: mpsc::Sender<Event>,
 }
 
 impl Minecraft {
-    fn new(command: &str, tx: mpsc::Sender<Event>) -> (io::BufWriter<process::ChildStdin>, Self) {
+    fn new(
+        command: &str,
+        tx: mpsc::Sender<Event>,
+    ) -> (io::BufWriter<process::ChildStdin>, process::Child, Self) {
         let mut child = process::Command::new(command)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -189,7 +203,7 @@ impl Minecraft {
             .take()
             .map(io::BufWriter::new)
             .expect("[IMPOSSIBLE]: stdin is piped");
-        (stdin, Minecraft { child, stdout, tx })
+        (stdin, child, Minecraft { stdout, tx })
     }
 
     async fn start(self) -> anyhow::Result<()> {
@@ -218,6 +232,24 @@ impl Stdin {
         while let Some(line) = lines.next_line().await? {
             self.tx.send(Event::Stdin(line)).await?;
         }
+        Ok(())
+    }
+}
+
+struct Shutdown {
+    listener: net::TcpListener,
+    tx: mpsc::Sender<Event>,
+}
+
+impl Shutdown {
+    async fn new(tx: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        let listener = net::TcpListener::bind((ADDR, PORT)).await?;
+        Ok(Self { listener, tx })
+    }
+
+    async fn start(self) -> anyhow::Result<()> {
+        let (_, _) = self.listener.accept().await?;
+        self.tx.send(Event::Shutdown).await?;
         Ok(())
     }
 }
