@@ -109,10 +109,7 @@ async fn process(
                 if message.content.trim() == "!online" {
                     let online =
                         format!("{} online: {}", online.len(), online.iter().join_with(", "));
-                    message
-                        .channel_id
-                        .send_message(&http.http, |builder| builder.content(online))
-                        .await?;
+                    message.channel_id.say(&http.http, online).await?;
                     continue;
                 }
 
@@ -125,9 +122,7 @@ async fn process(
                 stdout.write_all(&[b'\n']).await?;
                 stdout.flush().await?;
 
-                verbose_channel
-                    .send_message(&http.http, |builder| builder.content(&message))
-                    .await?;
+                verbose_channel.say(&http.http, &message).await?;
 
                 let message = if let Some(captures) = JOIN.captures(&message) {
                     online.insert(captures[1].to_owned());
@@ -143,9 +138,7 @@ async fn process(
                     continue;
                 };
 
-                general_channel
-                    .send_message(&http.http, |builder| builder.content(&message))
-                    .await?;
+                general_channel.say(&http.http, message).await?;
             }
             Event::Stdin(message) => {
                 child_stdin.write_all(message.as_bytes()).await?;
