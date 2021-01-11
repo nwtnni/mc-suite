@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
             process(
                 event_rx,
                 Some(shutdown_tx),
-                child_stdin,
+                Some(child_stdin),
                 stdout,
                 http,
                 general_channel,
@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
 async fn process(
     mut event_rx: mpsc::Receiver<Event>,
     mut shutdown_tx: Option<oneshot::Sender<()>>,
-    mut child_stdin: io::BufWriter<process::ChildStdin>,
+    mut child_stdin: Option<io::BufWriter<process::ChildStdin>>,
     mut stdout: io::BufWriter<io::Stdout>,
     http: Arc<serenity::CacheAndHttp>,
     general_channel: id::ChannelId,
@@ -127,9 +127,11 @@ async fn process(
                     continue;
                 }
 
-                let say = format!("/say [{}]: {}\n", message.author.name, message.content);
-                child_stdin.write_all(say.as_bytes()).await?;
-                child_stdin.flush().await?;
+                if let Some(child_stdin) = &mut child_stdin {
+                    let say = format!("/say [{}]: {}\n", message.author.name, message.content);
+                    child_stdin.write_all(say.as_bytes()).await?;
+                    child_stdin.flush().await?;
+                }
             }
             Event::Minecraft(message) => {
                 stdout.write_all(message.as_bytes()).await?;
@@ -159,11 +161,15 @@ async fn process(
                     .await?;
             }
             Event::Stdin(message) => {
-                child_stdin.write_all(message.as_bytes()).await?;
-                child_stdin.write_all(&[b'\n']).await?;
-                child_stdin.flush().await?;
+                if let Some(child_stdin) = &mut child_stdin {
+                    child_stdin.write_all(message.as_bytes()).await?;
+                    child_stdin.write_all(&[b'\n']).await?;
+                    child_stdin.flush().await?;
+                }
+
                 if message.trim() == STOP {
                     if let Some(tx) = shutdown_tx.take() {
+                        child_stdin.take();
                         tx.send(())
                             .expect("[INTERNAL ERROR]: `shutdown_rx` dropped");
                     }
