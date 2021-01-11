@@ -16,6 +16,7 @@ use tokio::io::AsyncBufReadExt as _;
 use tokio::io::AsyncWriteExt as _;
 use tokio::net;
 use tokio::process;
+use tokio::runtime;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -47,53 +48,54 @@ struct Opt {
     command: String,
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
+
+    let runtime = runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    let _guard = runtime.enter();
 
     let (event_tx, event_rx) = mpsc::channel(10);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    let shutdown = Shutdown::new(event_tx.clone()).await?;
+    let shutdown = runtime.block_on(Shutdown::new(event_tx.clone()))?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
     let (stdout, stdin) = Stdin::new(event_tx.clone());
-    let mut discord = serenity::Client::builder(&opt.token)
-        .event_handler(Discord(event_tx))
-        .framework(framework::StandardFramework::default())
-        .await?;
+    let mut discord = runtime.block_on({
+        serenity::Client::builder(&opt.token)
+            .event_handler(Discord(event_tx))
+            .framework(framework::StandardFramework::default())
+    })?;
 
     let http = Arc::clone(&discord.cache_and_http);
     let general_channel = id::ChannelId::from(opt.general_id);
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
 
-    tokio::select! {
-        done = shutdown_rx => done?,
-        done = tokio::spawn(async move { shutdown.start().await }) => done??,
-        done = tokio::spawn(async move { discord.start().await }) => done??,
-        done = tokio::spawn(async move { minecraft.start().await }) => done??,
-        done = tokio::spawn(async move { stdin.start().await }) => done??,
-        done = tokio::spawn(async move {
-            process(
-                event_rx,
-                Some(shutdown_tx),
-                Some(child_stdin),
-                stdout,
-                http,
-                general_channel,
-                verbose_channel,
-            )
-            .await
-        }) => done??,
-    }
+    runtime.spawn(async move { shutdown.start().await });
+    runtime.spawn(async move { discord.start().await });
+    runtime.spawn(async move { minecraft.start().await });
+    runtime.spawn(async move { stdin.start().await });
+    runtime.spawn(async move {
+        process(
+            event_rx,
+            Some(shutdown_tx),
+            Some(child_stdin),
+            stdout,
+            http,
+            general_channel,
+            verbose_channel,
+        )
+        .await
+    });
 
-    child.wait().await?;
+    runtime.block_on(shutdown_rx)?;
+    runtime.block_on(child.wait())?;
+    runtime.shutdown_background();
 
     if opt.shutdown {
-        process::Command::new("shutdown")
-            .arg("now")
-            .spawn()?
-            .wait()
-            .await?;
+        std::process::Command::new("shutdown").arg("now").spawn()?;
     }
 
     Ok(())
@@ -113,7 +115,7 @@ async fn process(
     while let Some(event) = event_rx.recv().await {
         match event {
             Event::Discord(message) => {
-                if message.author.name == "mc-sync" {
+                if message.author.name == "mc-boot" || message.author.name == "mc-sync" {
                     continue;
                 }
 
