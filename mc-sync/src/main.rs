@@ -18,6 +18,7 @@ use tokio::net;
 use tokio::process;
 use tokio::runtime;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 
 /// Shutdown port.
 static PORT: u16 = 10101;
@@ -54,7 +55,7 @@ fn main() -> anyhow::Result<()> {
 
     let (event_tx, event_rx) = mpsc::channel(10);
 
-    let shutdown = runtime.block_on(Shutdown::new(event_tx.clone()))?;
+    let shutdown = runtime.block_on(Shutdown::new())?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
     let (stdout, stdin) = Stdin::new(event_tx.clone());
     let mut discord = runtime.block_on({
@@ -67,20 +68,31 @@ fn main() -> anyhow::Result<()> {
     let general_channel = id::ChannelId::from(opt.general_id);
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
 
-    runtime.spawn(async move { shutdown.start().await });
-    runtime.spawn(async move { discord.start().await });
-    runtime.spawn(async move { minecraft.start().await });
-    runtime.spawn(async move { stdin.start().await });
+    // If any long-running task returns or errors unexpectedly, try to shut down
+    // the Minecraft server gracefully.
     runtime.spawn(async move {
-        process(
-            event_rx,
-            child_stdin,
-            stdout,
-            http,
-            general_channel,
-            verbose_channel,
-        )
-        .await
+        let child_stdin = Mutex::new(child_stdin);
+
+        let finished = tokio::select! {
+            finished = shutdown.start() => finished,
+            finished = discord.start() => finished.map_err(anyhow::Error::from),
+            finished = minecraft.start() => finished,
+            finished = stdin.start() => finished,
+            finished = process(
+                event_rx,
+                &child_stdin,
+                stdout,
+                http,
+                general_channel,
+                verbose_channel,
+            ) => finished,
+        };
+
+        let mut child_stdin = child_stdin.lock().await;
+        child_stdin.write_all(STOP.as_bytes()).await?;
+        child_stdin.write_all(b"\n").await?;
+        child_stdin.flush().await?;
+        finished
     });
 
     runtime.block_on(child.wait())?;
@@ -91,7 +103,7 @@ fn main() -> anyhow::Result<()> {
 
 async fn process(
     mut event_rx: mpsc::Receiver<Event>,
-    mut child_stdin: io::BufWriter<process::ChildStdin>,
+    child_stdin: &Mutex<io::BufWriter<process::ChildStdin>>,
     mut stdout: io::BufWriter<io::Stdout>,
     http: Arc<serenity::CacheAndHttp>,
     general_channel: id::ChannelId,
@@ -114,12 +126,13 @@ async fn process(
                 }
 
                 let say = format!("/say [{}]: {}\n", message.author.name, message.content);
+                let mut child_stdin = child_stdin.lock().await;
                 child_stdin.write_all(say.as_bytes()).await?;
                 child_stdin.flush().await?;
             }
             Event::Minecraft(message) => {
                 stdout.write_all(message.as_bytes()).await?;
-                stdout.write_all(&[b'\n']).await?;
+                stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
 
                 verbose_channel.say(&http.http, &message).await?;
@@ -141,8 +154,9 @@ async fn process(
                 general_channel.say(&http.http, message).await?;
             }
             Event::Stdin(message) => {
+                let mut child_stdin = child_stdin.lock().await;
                 child_stdin.write_all(message.as_bytes()).await?;
-                child_stdin.write_all(&[b'\n']).await?;
+                child_stdin.write_all(b"\n").await?;
                 child_stdin.flush().await?;
             }
         }
@@ -244,20 +258,15 @@ impl Stdin {
     }
 }
 
-struct Shutdown {
-    listener: net::TcpListener,
-    tx: mpsc::Sender<Event>,
-}
+struct Shutdown(net::TcpListener);
 
 impl Shutdown {
-    async fn new(tx: mpsc::Sender<Event>) -> anyhow::Result<Self> {
-        let listener = net::TcpListener::bind((ADDR, PORT)).await?;
-        Ok(Self { listener, tx })
+    async fn new() -> anyhow::Result<Self> {
+        Ok(Self(net::TcpListener::bind((ADDR, PORT)).await?))
     }
 
     async fn start(self) -> anyhow::Result<()> {
-        let (_, _) = self.listener.accept().await?;
-        self.tx.send(Event::Stdin(String::from(STOP))).await?;
+        let (_, _) = self.0.accept().await?;
         Ok(())
     }
 }
