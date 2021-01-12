@@ -96,11 +96,7 @@ async fn main() -> anyhow::Result<()> {
 
                 ec2.start().await?;
 
-                general_channel
-                    .edit_message(&http.http, message, |message| {
-                        message.content("Server has started!")
-                    })
-                    .await?;
+                message.delete(&http).await?;
                 typing.stop();
             } else if connected == 0 && mem::replace(&mut online, false) {
                 let typing = general_channel.start_typing(&http.http)?;
@@ -111,11 +107,7 @@ async fn main() -> anyhow::Result<()> {
                 let _ = net::TcpStream::connect("craft.nwtnni.me:10101").await?;
                 ec2.wait_until_stopped().await?;
 
-                general_channel
-                    .edit_message(&http.http, message, |message| {
-                        message.content("Server has stopped.")
-                    })
-                    .await?;
+                message.delete(&http).await?;
                 typing.stop();
             }
         }
