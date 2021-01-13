@@ -20,11 +20,6 @@ use tokio::runtime;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
-/// Shutdown port.
-static PORT: u16 = 10101;
-static ADDR: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-static STOP: &str = "/stop";
-
 /// Wrap a Minecraft server and synchronize the chat with Discord.
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -39,6 +34,10 @@ struct Opt {
     /// Forward all server logs
     #[structopt(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
     verbose_id: u64,
+
+    /// Shutdown port
+    #[structopt(long, env = "MINECRAFT_SERVER_PORT")]
+    server_port: u16,
 
     /// Path to Minecraft server.jar or script
     command: String,
@@ -55,7 +54,7 @@ fn main() -> anyhow::Result<()> {
 
     let (event_tx, event_rx) = mpsc::channel(10);
 
-    let shutdown = runtime.block_on(Shutdown::new())?;
+    let shutdown = runtime.block_on(Shutdown::new(opt.server_port))?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
     let (stdout, stdin) = Stdin::new(event_tx.clone());
     let mut discord = runtime.block_on({
@@ -89,8 +88,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         let mut child_stdin = child_stdin.lock().await;
-        child_stdin.write_all(STOP.as_bytes()).await?;
-        child_stdin.write_all(b"\n").await?;
+        child_stdin.write_all(b"/stop\n").await?;
         child_stdin.flush().await?;
         finished
     });
@@ -261,8 +259,11 @@ impl Stdin {
 struct Shutdown(net::TcpListener);
 
 impl Shutdown {
-    async fn new() -> anyhow::Result<Self> {
-        Ok(Self(net::TcpListener::bind((ADDR, PORT)).await?))
+    async fn new(port: u16) -> anyhow::Result<Self> {
+        net::TcpListener::bind((IpAddr::V4(Ipv4Addr::UNSPECIFIED), port))
+            .await
+            .map(Self)
+            .map_err(anyhow::Error::from)
     }
 
     async fn start(self) -> anyhow::Result<()> {
