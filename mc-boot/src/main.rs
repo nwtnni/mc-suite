@@ -2,6 +2,7 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rusoto_core::credential;
 use rusoto_core::Region;
 use rusoto_ec2::DescribeInstanceStatusRequest;
 use rusoto_ec2::Ec2 as _;
@@ -30,28 +31,57 @@ struct Opt {
     /// AWS EC2 instance that the server runs on
     #[structopt(long, env = "AWS_INSTANCE_ID")]
     instance_id: String,
+
+    /// AWS credential
+    #[structopt(long, env = "AWS_ACCESS_KEY_ID")]
+    access_key_id: String,
+
+    /// AWS credential
+    #[structopt(long, env = "AWS_SECRET_ACCESS_KEY")]
+    secret_access_key: String,
+
+    /// Minecraft server address
+    #[structopt(long, env = "MINECRAFT_SERVER_URL")]
+    server_url: String,
+
+    /// Minecraft server shutdown port
+    #[structopt(long, env = "MINECRAFT_SERVER_PORT")]
+    server_port: u16,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let opt = Opt::from_args();
+    let Opt {
+        token,
+        general_id,
+        instance_id,
+        access_key_id,
+        secret_access_key,
+        server_url,
+        server_port,
+    } = Opt::from_args();
 
     let (tx, mut rx) = mpsc::channel(10);
 
-    let mut discord = serenity::Client::builder(&opt.token)
+    let mut discord = serenity::Client::builder(&token)
         .event_handler(Discord(tx))
         .framework(framework::StandardFramework::default())
         .await?;
 
-    let general_channel = id::ChannelId::from(opt.general_id);
+    let general_channel = id::ChannelId::from(general_id);
     let http = Arc::clone(&discord.cache_and_http);
-    let ec2 = Ec2::new(Region::UsEast2, opt.instance_id);
-
-    let mut connected = 0usize;
-    let mut online = false;
+    let ec2 = Ec2::new(
+        Region::UsEast2,
+        instance_id,
+        access_key_id,
+        secret_access_key,
+    )?;
 
     let discord = tokio::spawn(async move { discord.start().await });
     let main = tokio::spawn(async move {
+        let mut connected = 0usize;
+        let mut online = false;
+
         while let Some(Event::Voice { old, new }) = rx.recv().await {
             match (old, new) {
                 // Someone has joined a voice channel
@@ -104,9 +134,12 @@ async fn main() -> anyhow::Result<()> {
                     .say(&http.http, "Server is stopping...")
                     .await?;
 
-                let _ = net::TcpStream::connect("craft.nwtnni.me:10101").await?;
-                ec2.wait_until_stopped().await?;
+                while let Err(error) = net::TcpStream::connect((&*server_url, server_port)).await {
+                    eprintln!("{}", error);
+                    time::sleep(SLEEP).await;
+                }
 
+                ec2.wait_until_stopped().await?;
                 message.delete(&http).await?;
                 typing.stop();
             }
@@ -156,16 +189,25 @@ static STOPPED: i64 = 80;
 
 #[derive(Clone)]
 struct Ec2 {
-    client: Arc<Ec2Client>,
-    instance: String,
+    client: Ec2Client,
+    instance_id: String,
 }
 
 impl Ec2 {
-    fn new(region: Region, instance: String) -> Self {
-        Ec2 {
-            client: Arc::new(Ec2Client::new(region)),
-            instance,
-        }
+    fn new(
+        region: Region,
+        instance_id: String,
+        access_key_id: String,
+        secret_access_key: String,
+    ) -> anyhow::Result<Self> {
+        Ok(Ec2 {
+            client: Ec2Client::new_with(
+                rusoto_core::HttpClient::new()?,
+                credential::StaticProvider::new_minimal(access_key_id, secret_access_key),
+                region,
+            ),
+            instance_id,
+        })
     }
 
     /// Start the instance and wait until it is running.
@@ -173,7 +215,7 @@ impl Ec2 {
         let request = StartInstancesRequest {
             additional_info: None,
             dry_run: Some(false),
-            instance_ids: vec![self.instance.clone()],
+            instance_ids: vec![self.instance_id.clone()],
         };
 
         while !self
@@ -183,7 +225,7 @@ impl Ec2 {
             .starting_instances
             .into_iter()
             .flatten()
-            .filter(|change| change.instance_id.as_ref() == Some(&self.instance))
+            .filter(|change| change.instance_id.as_ref() == Some(&self.instance_id))
             .filter_map(|change| change.current_state)
             .filter_map(|state| state.code)
             .any(|code| code & 0b1111_1111 == RUNNING)
@@ -200,7 +242,7 @@ impl Ec2 {
             dry_run: Some(false),
             filters: None,
             include_all_instances: Some(true),
-            instance_ids: Some(vec![self.instance.clone()]),
+            instance_ids: Some(vec![self.instance_id.clone()]),
             max_results: None,
             next_token: None,
         };
@@ -212,7 +254,7 @@ impl Ec2 {
             .instance_statuses
             .into_iter()
             .flatten()
-            .filter(|status| status.instance_id.as_ref() == Some(&self.instance))
+            .filter(|status| status.instance_id.as_ref() == Some(&self.instance_id))
             .filter_map(|status| status.instance_state)
             .filter_map(|state| state.code)
             .any(|code| code & 0b1111_1111 == STOPPED)
