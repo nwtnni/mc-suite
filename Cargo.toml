@@ -1,2 +1,5 @@
 [workspace]
-members = ["mc-boot", "mc-sync"]
+members = [
+    "mc-boot",
+    "mc-sync",
+]
