@@ -34,11 +34,11 @@ struct Opt {
 
     /// Forward all server logs
     #[arg(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
-    verbose_id: u64,
+    verbose_id: Option<u64>,
 
     /// Shutdown port
     #[arg(long, env = "MINECRAFT_SERVER_PORT")]
-    server_port: u16,
+    server_port: Option<u16>,
 
     /// Path to Minecraft server.jar or script
     command: String,
@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
 
     let _guard = runtime.enter();
 
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (event_tx, event_rx) = mpsc::channel(16);
 
     let shutdown = runtime.block_on(Shutdown::new(opt.server_port))?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
@@ -69,7 +69,7 @@ fn main() -> anyhow::Result<()> {
 
     let http = Arc::clone(&discord.http);
     let general_channel = id::ChannelId::from(opt.general_id);
-    let verbose_channel = id::ChannelId::from(opt.verbose_id);
+    let verbose_channel = opt.verbose_id.map(id::ChannelId::from);
 
     // If any long-running task returns or errors unexpectedly, try to shut down
     // the Minecraft server gracefully.
@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         let child_stdin = Mutex::new(child_stdin);
 
         let finished = tokio::select! {
-            finished = shutdown.start() => finished,
+            finished = shutdown.start(), if shutdown.is_enabled() => finished,
             finished = discord.start() => finished.map_err(anyhow::Error::from),
             finished = minecraft.start() => finished,
             finished = stdin.start() => finished,
@@ -109,7 +109,7 @@ async fn process(
     mut stdout: io::BufWriter<io::Stdout>,
     http: Arc<serenity::http::Http>,
     general_channel: id::ChannelId,
-    verbose_channel: id::ChannelId,
+    verbose_channel: Option<id::ChannelId>,
 ) -> anyhow::Result<()> {
     let mut online = HashSet::<String>::new();
 
@@ -137,7 +137,9 @@ async fn process(
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
 
-                verbose_channel.say(&http, &message).await?;
+                if let Some(verbose_channel) = verbose_channel {
+                    verbose_channel.say(&http, &message).await?;
+                }
 
                 let message = if let Some(captures) = JOIN.captures(&message) {
                     online.insert(captures[1].to_owned());
@@ -260,18 +262,31 @@ impl Stdin {
     }
 }
 
-struct Shutdown(net::TcpListener);
+struct Shutdown(Option<net::TcpListener>);
 
 impl Shutdown {
-    async fn new(port: u16) -> anyhow::Result<Self> {
+    async fn new(port: Option<u16>) -> anyhow::Result<Self> {
+        let Some(port) = port else {
+            return Ok(Self(None));
+        };
+
         net::TcpListener::bind((IpAddr::V4(Ipv4Addr::UNSPECIFIED), port))
             .await
+            .map(Option::Some)
             .map(Self)
             .map_err(anyhow::Error::from)
     }
 
+    fn is_enabled(&self) -> bool {
+        self.0.is_some()
+    }
+
     async fn start(self) -> anyhow::Result<()> {
-        let (_, _) = self.0.accept().await?;
+        let (_, _) = self
+            .0
+            .expect("[INTERNAL ERROR]: tried to poll disabled shutdown")
+            .accept()
+            .await?;
         Ok(())
     }
 }
