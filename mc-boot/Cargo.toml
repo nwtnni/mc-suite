@@ -7,9 +7,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0"
-rusoto_core = { version = "0.46", default_features = false, features = ["rustls"] }
-rusoto_ec2 = { version = "0.46", default_features = false, features = ["rustls"] }
-serenity = "0.10"
-structopt = "0.3"
-tokio = { version = "1.0", features = ["macros", "net", "rt", "sync", "time"] }
+anyhow.workspace = true
+clap.workspace = true
+rusoto_core = { version = "0.46", default-features = false, features = ["rustls"] }
+rusoto_ec2 = { version = "0.46", default-features = false, features = ["rustls"] }
+serenity = { workspace = true, features = ["cache"] }
+tokio.workspace = true

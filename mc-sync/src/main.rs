@@ -1,16 +1,17 @@
 use std::collections::HashSet;
+use std::future::IntoFuture as _;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
+use clap::Parser;
 use joinery::JoinableIterator;
-use once_cell::sync::Lazy;
 use regex::Regex;
+use serenity::all::GatewayIntents;
 use serenity::client;
-use serenity::framework;
 use serenity::model::channel;
 use serenity::model::id;
-use structopt::StructOpt;
 use tokio::io;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::io::AsyncWriteExt as _;
@@ -21,22 +22,22 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
 /// Wrap a Minecraft server and synchronize the chat with Discord.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Opt {
     /// Discord bot application token
-    #[structopt(long, env = "DISCORD_TOKEN")]
+    #[arg(long, env = "DISCORD_TOKEN")]
     token: String,
 
     /// Forward interesting server events
-    #[structopt(long, env = "DISCORD_GENERAL_CHANNEL_ID")]
+    #[arg(long, env = "DISCORD_GENERAL_CHANNEL_ID")]
     general_id: u64,
 
     /// Forward all server logs
-    #[structopt(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
+    #[arg(long, env = "DISCORD_VERBOSE_CHANNEL_ID")]
     verbose_id: u64,
 
     /// Shutdown port
-    #[structopt(long, env = "MINECRAFT_SERVER_PORT")]
+    #[arg(long, env = "MINECRAFT_SERVER_PORT")]
     server_port: u16,
 
     /// Path to Minecraft server.jar or script
@@ -44,7 +45,7 @@ struct Opt {
 }
 
 fn main() -> anyhow::Result<()> {
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
 
     let runtime = runtime::Builder::new_current_thread()
         .enable_all()
@@ -57,13 +58,16 @@ fn main() -> anyhow::Result<()> {
     let shutdown = runtime.block_on(Shutdown::new(opt.server_port))?;
     let (child_stdin, mut child, minecraft) = Minecraft::new(&opt.command, event_tx.clone());
     let (stdout, stdin) = Stdin::new(event_tx.clone());
-    let mut discord = runtime.block_on({
-        serenity::Client::builder(&opt.token)
-            .event_handler(Discord(event_tx))
-            .framework(framework::StandardFramework::default())
-    })?;
+    let mut discord = runtime.block_on(
+        serenity::Client::builder(
+            &opt.token,
+            GatewayIntents::GUILD_MESSAGES | GatewayIntents::MESSAGE_CONTENT,
+        )
+        .event_handler(Discord(event_tx))
+        .into_future(),
+    )?;
 
-    let http = Arc::clone(&discord.cache_and_http);
+    let http = Arc::clone(&discord.http);
     let general_channel = id::ChannelId::from(opt.general_id);
     let verbose_channel = id::ChannelId::from(opt.verbose_id);
 
@@ -103,7 +107,7 @@ async fn process(
     mut event_rx: mpsc::Receiver<Event>,
     child_stdin: &Mutex<io::BufWriter<process::ChildStdin>>,
     mut stdout: io::BufWriter<io::Stdout>,
-    http: Arc<serenity::CacheAndHttp>,
+    http: Arc<serenity::http::Http>,
     general_channel: id::ChannelId,
     verbose_channel: id::ChannelId,
 ) -> anyhow::Result<()> {
@@ -119,7 +123,7 @@ async fn process(
                 if message.content.trim() == "!online" {
                     let online =
                         format!("{} online: {}", online.len(), online.iter().join_with(", "));
-                    message.channel_id.say(&http.http, online).await?;
+                    message.channel_id.say(&http, online).await?;
                     continue;
                 }
 
@@ -133,7 +137,7 @@ async fn process(
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
 
-                verbose_channel.say(&http.http, &message).await?;
+                verbose_channel.say(&http, &message).await?;
 
                 let message = if let Some(captures) = JOIN.captures(&message) {
                     online.insert(captures[1].to_owned());
@@ -149,7 +153,7 @@ async fn process(
                     continue;
                 };
 
-                general_channel.say(&http.http, message).await?;
+                general_channel.say(&http, message).await?;
             }
             Event::Stdin(message) => {
                 let mut child_stdin = child_stdin.lock().await;
@@ -182,20 +186,20 @@ impl client::EventHandler for Discord {
     }
 }
 
-static JOIN: Lazy<Regex> = Lazy::new(|| {
+static JOIN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r".*\[Server thread/INFO\]: (.*)\[[^\]]*\] logged in with entity id .* at .*")
         .unwrap()
 });
 
-static QUIT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r".*\[Server thread/INFO\]: (.*) left the game").unwrap());
+static QUIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".*\[Server thread/INFO\]: (.*) left the game").unwrap());
 
-static ACHIEVEMENT: Lazy<Regex> = Lazy::new(|| {
+static ACHIEVEMENT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r".*\[Server thread/INFO\]: (.*) has made the advancement \[(.*)\]").unwrap()
 });
 
-static MESSAGE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r".*\[Server thread/INFO\]: <([^ \]]*)> (.*)").unwrap());
+static MESSAGE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".*\[Server thread/INFO\]: <([^ \]]*)> (.*)").unwrap());
 
 struct Minecraft {
     stdout: io::BufReader<process::ChildStdout>,

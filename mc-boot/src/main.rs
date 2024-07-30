@@ -2,23 +2,23 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Parser;
 use rusoto_core::credential;
 use rusoto_core::Region;
 use rusoto_ec2::DescribeInstanceStatusRequest;
 use rusoto_ec2::Ec2 as _;
 use rusoto_ec2::Ec2Client;
 use rusoto_ec2::StartInstancesRequest;
+use serenity::all::GatewayIntents;
 use serenity::client;
-use serenity::framework;
 use serenity::model::id;
 use serenity::model::voice;
-use structopt::StructOpt;
 use tokio::net;
 use tokio::sync::mpsc;
 use tokio::time;
 
 /// Start and hibernate an EC2 instance based on Discord voice channel usage.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Opt {
     /// Discord bot application token
     #[structopt(long, env = "DISCORD_TOKEN")]
@@ -59,17 +59,16 @@ async fn main() -> anyhow::Result<()> {
         secret_access_key,
         server_url,
         server_port,
-    } = Opt::from_args();
+    } = Opt::parse();
 
     let (tx, mut rx) = mpsc::channel(10);
 
-    let mut discord = serenity::Client::builder(&token)
+    let mut discord = serenity::Client::builder(&token, GatewayIntents::GUILD_VOICE_STATES)
         .event_handler(Discord(tx))
-        .framework(framework::StandardFramework::default())
         .await?;
 
     let general_channel = id::ChannelId::from(general_id);
-    let http = Arc::clone(&discord.cache_and_http);
+    let http = Arc::clone(&discord.http);
     let ec2 = Ec2::new(
         Region::UsEast2,
         instance_id,
@@ -119,20 +118,16 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if connected > 0 && !mem::replace(&mut online, true) {
-                let typing = general_channel.start_typing(&http.http)?;
-                let message = general_channel
-                    .say(&http.http, "Server is starting...")
-                    .await?;
+                let typing = general_channel.start_typing(&http);
+                let message = general_channel.say(&http, "Server is starting...").await?;
 
                 ec2.start().await?;
 
                 message.delete(&http).await?;
                 typing.stop();
             } else if connected == 0 && mem::replace(&mut online, false) {
-                let typing = general_channel.start_typing(&http.http)?;
-                let message = general_channel
-                    .say(&http.http, "Server is stopping...")
-                    .await?;
+                let typing = general_channel.start_typing(&http);
+                let message = general_channel.say(&http, "Server is stopping...").await?;
 
                 while let Err(error) = net::TcpStream::connect((&*server_url, server_port)).await {
                     eprintln!("{}", error);
@@ -170,7 +165,6 @@ impl client::EventHandler for Discord {
     async fn voice_state_update(
         &self,
         _: client::Context,
-        _: Option<id::GuildId>,
         old: Option<voice::VoiceState>,
         new: voice::VoiceState,
     ) {
